@@ -1,0 +1,94 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Cwd;
+use File::Path qw(mkpath rmtree);
+
+my $dir = shift || die "usage: $0 destination_dir svn_url";
+$dir =~ s!/$!!;
+
+# my $url = "https://extradev.ina.fr:4443/svn/dlweb/backend/repository/";
+my $url = shift || die "usage: $0 destination_dir svn_url";
+$url =~ s!/$!!;
+
+my $build_dir = "$dir/lapbuild/";
+my $exec = 'lap';
+
+my $pp_cmd = "cd $build_dir && pp -I lib/ -M inc.pm bin/lap -a data/ -o ../$exec";
+
+my $lib_dir = "$build_dir/lib/"; die unless $lib_dir =~ m!/$!;
+my $data_dir = "$build_dir/data/"; die unless $data_dir =~ m!/$!;
+my $bin_dir = "$build_dir/bin/"; die unless $bin_dir =~ m!/$!;
+my $inc_file = "$build_dir/inc.pm";
+
+# my @exported = ($lib_dir, $data_dir, $bin_dir, $inc_file);
+
+die "'$dir' already contains a build dir $build_dir\n" if -d $build_dir;
+# rmtree($build_dir);
+mkpath($build_dir);
+
+my @export = qw(
+	Lap
+	Vortex
+	Anet
+	Sub-CB
+	List-Pairwise
+	Class-SimpleFactory
+	URL-String
+	IO-Slurp
+	Storage-Content
+	File-HTTP
+
+	BloomFilters/lib/Anet
+	Lap/bin
+);
+
+for (@export) {
+	print "Exporting $_...\n";
+	$_ .= '/lib' unless m!/!; # default to lib/ when not specified
+	(my $dest = $_) =~ s![^/]+/!!; # remove distribution name to merge everything
+	system("svn export $url/$_ $build_dir/$dest --force") && die "svn export failed\n";
+	print "\n";
+}
+
+my @harbor_data = glob("$build_dir/lib/Vortex/Harbor/*/");
+
+if (@harbor_data) {
+	print "Moving harbor data...\n";
+	mkpath("$data_dir/harbor/");
+
+	for (@harbor_data) {
+		(my $harbor) = m!([^/]+)/$!;
+		print "  $harbor\n";
+		rename($_ => "$data_dir/harbor/$harbor") or die "harbor '$harbor' data move failed\n";
+	}
+}
+
+
+
+{
+	# Class::SimpleFactory sub classes cannot be found by PAR...
+	print "\nListing Modules for inclusion...\n";
+	my @modules;# = qw(Tie::Hash::LRU);
+
+	for (split(/\n/, `find $lib_dir`)) {
+		next unless s!\.pm$!!;
+		s!^$lib_dir!!;
+		s!/!::!g;
+		push @modules, $_;
+	}
+
+	open(my $fh, '>', $inc_file) or die "$inc_file: $!";
+	print $fh map {"use $_;\n"} sort @modules;
+	printf "  %d modules included\n", 0+@modules;
+}
+
+print "\nPacking...\n";
+print "  $pp_cmd\n";
+system($pp_cmd) and die "packing failed";
+
+print "\nDeleting build dir...\n";
+rmtree($build_dir);
+
+print "\nSuccess\n  Lap packed as $dir/$exec\n\n";

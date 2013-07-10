@@ -1,0 +1,180 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+no warnings 'once';
+BEGIN {eval "use ina"}
+use Anet;
+use Vortex;
+use YAML::XS;
+use JSON::XS;
+use Getopt::Long;
+
+Anet::CORE::Loop::set_die_hook(
+	sub {
+		(my $err = reverse shift) =~ s/^\n.+? ta //;
+		$err = reverse $err;
+		die "Error: $err\n";
+	}
+);
+
+$|=1;
+
+our $VERSION = '0.01';
+
+my %options = (
+	'web-port' => 4338,
+	'writer-port' => 4365,
+	proxy => undef,
+	'temp-dir' => '/tmp/LAP',
+	'bloom-netloc' => undef,
+	digest => undef,
+);
+
+my %options_def = (
+	# 'quiet|q'		=> "Quiet output.",
+	'web-port=s' => sprintf("Web client listening port.\nDefault to %d", $options{'web-port'}),
+	'writer-port=s' => sprintf("Writer listening port.\nDefault to %d.", $options{'writer-port'}),
+	'proxy=s' => sprintf("Web proxy network location in host:port format.\nDefault to %s", $options{'proxy'} || 'none'),
+	'temp-dir=s' => sprintf("Temporary directory for big files download\nDefault to %s", $options{'temp-dir'} || 'none'),
+	'bloom-netloc=s' => sprintf("Bloom Filter server network location in host:port format, for content deduplication.\nDefault to %s", $options{'bloom-netloc'} || 'none'),
+	'digest=s' => sprintf("Content Digest Calculation Algorithm.\nKnown algorithms: MD5, SHA-1, SHA-256, SHA-512\nDefault to %s", $options{digest} || 'none'),
+	'version' => "Print version number and exit.",
+	'help' => 'Print usage info and exit.',
+	'debug' => "Debug mode.",
+	'legacy' => 'Lagacy mode.',
+);
+
+# unless (@ARGV) {
+# 	print STDERR "Arguments missing.\n";
+# 	usage();
+# 	exit 1;
+# }
+
+# command line
+my $cmd_options = do {
+	my %hash;
+	Getopt::Long::Configure(qw(pass_through no_auto_abbrev no_ignore_case));
+	Getopt::Long::GetOptions(\%hash, keys %options_def);
+	if (my @bad_args = grep {/^-/} @ARGV) {
+		print STDERR sprintf("unrecognized command line option%s '%s'\n",
+			@bad_args>1 ? 's' : '',
+			join("', '", @bad_args),
+		);
+		exit 1;
+	}
+	for (values %hash) {
+		$_ = undef if $_ eq 'none';
+	}
+	\%hash
+};
+
+# JSON or YAML files
+for (@ARGV) {
+	my $content = do {
+		open(my $fh, '<', $_) or die "$_: $!\n";
+		local $/;
+		<$fh>
+	};
+	my $hash = eval { decode_json $content } || eval { Load $content } || die "unable to decode $_: $@\n";
+
+	for (keys %$hash) {
+		$options{$_} = $hash->{$_}
+	}
+}
+
+# merge with command line
+for (keys %$cmd_options) {
+	$options{$_} = $cmd_options->{$_}
+}
+
+# force numerical
+$options{$_} += 0 for qw(web-port writer-port);
+
+if ($options{debug}) {
+	delay {
+		print STDERR "DEBUG: LAP alive at ", time, "\n"
+	} 0, 10;
+}
+
+if ($options{version}) {
+	print $VERSION, "\n";
+	exit 0;
+}
+
+if ($options{help}) {
+	usage();
+	exit 0;
+}
+warn "Lap harbor data directory: $ENV{'PAR_TEMP'}/inc/data/harbor/" if $ENV{'PAR_TEMP'};
+my $vortex = Vortex->new(
+	description => 'LAP Vortex',
+	data_directory => $ENV{'PAR_TEMP'} && "$ENV{'PAR_TEMP'}/inc/data/harbor/",
+	port => $options{'web-port'},
+	proxy => $options{proxy},
+	use_modification_stamps => 0,
+	harbor_tld => $options{legacy} ? 'dlweb' : 'vortex',
+	bypass_permission => 1,
+	default_harbor => 'lap',
+	default_harbor_redirect	=> 1,
+
+	first_request_timeout => 30,
+	inter_request_timeout => 300,
+	max_request_body_length => 1024*1024,
+
+	#only_preloaded_harbors => 1,
+	preload_harbors => {
+		($options{legacy} ? (Livearchiving => {fake => 1}) : ()),
+		Lap => {
+			writer_port => $options{'writer-port'},
+			bloom_netloc => $options{'bloom-netloc'},
+			digest => $options{digest},
+			content_max_memory => 5*1024*1024,
+			content_dir => $options{'temp-dir'},
+		},
+	},
+
+	compression => 0, # does not work when web_client_streaming == 1
+	web_client_streaming => 1,
+	web_client_compression => 'always',# never|unchanged|always
+	web_client_ignore_abort => 0, # not working
+
+	on_ready => closure {
+		my $vortex = shift;
+		print Dump({
+			'Vortex state' => {
+				ip => $vortex->ip,
+				%{Anet::state()}
+			},
+			'Arguments' => \%options,
+		}), "\n"
+	},
+);
+
+loop;
+
+sub usage {
+	print "usage: lap [JSON or YAML options files] [command line options]\n\n";
+	print "Valid options:\n";
+	
+	for my $k (sort keys %options_def) {
+		my $v = $options_def{$k};
+	
+		my $takes_arg = ($k =~ s/=.+$//);
+		my @keys = map {length($_)==1 ? "-$_" : "--$_"} split(/\|/, $k);
+	
+		$k = shift(@keys);
+		$k .= ' ['. join(', ', @keys). ']' if @keys;
+		$k .= ' ARG' if $takes_arg;
+		
+		if (defined $v) {
+			$v =~ s/([^\n]{40,51} )/$1\n/g;
+			my $spacer = ' 'x31;
+			$v =~ s/\n/\n$spacer/g;
+			print sprintf("  %-25s: %s\n", $k, $v);
+		} else {
+			print sprintf("  %s\n", $k);
+		}
+	}
+	
+	print "\n"
+}
