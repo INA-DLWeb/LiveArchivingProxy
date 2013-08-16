@@ -11,3 +11,18 @@ Using an HTTP proxy for Web archiving enables the use of any HTTP client for cra
 The LAP is designed to be highly performant, easy to use and archive-format agnostic. It will run on any 64-bit linux system.
 
 [Ina](http://www.ina.fr) uses the LAP in production since 2012 for 50% of its crawls and plans to use if for 100% of its crawls by 2014.
+
+
+Getting started
+---------------
+
+ * User manual : https://github.com/INA-DLWeb/LiveArchivingProxy/raw/master/LAP-UserGuide.pdf
+ * LAP binary : https://github.com/INA-DLWeb/LiveArchivingProxy/raw/master/lap.tar.gz
+ * WARC writer : https://oss.sonatype.org/content/repositories/snapshots/fr/ina/dlweb/lap-writer-warc/1.0-SNAPSHOT/lap-writer-warc-1.0-SNAPSHOT-jar-with-dependencies.jar
+
+Code resources
+--------------
+ * WARC writer project : https://bitbucket.org/nclarkekb/lap-writer-warc/
+ * Generic writer project : https://oss.sonatype.org/content/repositories/snapshots/fr/ina/dlweb/lap-writer-generic/
+
+
