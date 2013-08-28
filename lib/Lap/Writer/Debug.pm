@@ -17,7 +17,8 @@ sub on_token {
 		size_as_string(length($$data)),
 		length($$data),
 	);
-	$cb->()
+	$cb->();
+	1
 }
 
 1

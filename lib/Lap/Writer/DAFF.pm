@@ -21,6 +21,7 @@ use enum::fields::extending 'Lap::Writer::base', qw(
 	DAFF_DATA
 	DAFF_META
 	FORCE_META
+	TEMP_SUBDIR
 );
 
 use constant VERBOSE => 1;
@@ -49,6 +50,7 @@ sub new {
 		daff_data_dir => undef,
 		daff_meta_dir => undef,
 		force_meta => undef, # or hash ref
+		temp_subdir => 'lap_tmp',
 		@_
 	);
 
@@ -57,6 +59,7 @@ sub new {
 	my $daff_data_dir = delete($args{daff_data_dir}) || croak "missing argument 'daff_data_dir'";
 	my $daff_meta_dir = delete($args{daff_meta_dir}) || croak "missing argument 'daff_meta_dir'";
 	my $force_meta = delete($args{force_meta});
+	my $temp_subdir = delete($args{temp_subdir}) || '';
 
 	my $self = $class->SUPER::new(%args);
 
@@ -66,9 +69,10 @@ sub new {
 	$daff_meta_dir .= '/' unless $daff_meta_dir =~ m!/$!;
 	$self->[DAFF_DATA_DIR] = $daff_data_dir;
 	$self->[DAFF_META_DIR] = $daff_meta_dir;
+	$self->[TEMP_SUBDIR] = $temp_subdir;
 
-	mkpath($self->[DAFF_DATA_DIR]);
-	mkpath($self->[DAFF_META_DIR]);
+	mkpath($self->[DAFF_DATA_DIR].$self->[TEMP_SUBDIR]);
+	mkpath($self->[DAFF_META_DIR].$self->[TEMP_SUBDIR]);
 
 	$self->check_writer(\$self->[DAFF_DATA], $self->[DAFF_DATA_DIR], $self->[MAX_DAFF_DATA_SIZE]);
 	$self->check_writer(\$self->[DAFF_META], $self->[DAFF_META_DIR], $self->[MAX_DAFF_META_SIZE]);
@@ -86,16 +90,20 @@ sub check_writer {
 	if ($$writer_ref) {
 		return $$writer_ref if $$writer_ref->size < $max_size;
 		my $file = $$writer_ref->file; # before close
+		my $file_id = $$writer_ref->file_id;
 		$$writer_ref->close;
 		say "\ncommiting $file to $dir";
 		move($file, $dir) or die $!;
+		my $fh;
+		(open($fh, '>>', "$dir$self->[TEMP_SUBDIR]/log") && print $fh "$file_id\n") || die $!;
+		
 	}
 
-	my @small_daff = grep {-s $_ < $max_size} glob($dir.'*.daff');
+	my @small_daff = grep {-s $_ < $max_size} glob("$dir$self->[TEMP_SUBDIR]/*.daff");
 
 	$$writer_ref = File::DAFF::Writer->new(
 		DEFAULT_DAFF_PARAMS,
-		file => shift(@small_daff) || $dir,
+		file => shift(@small_daff) || "$dir$self->[TEMP_SUBDIR]",
 	)
 }
 
@@ -107,8 +115,15 @@ sub on_handshake {
 sub on_token {
 	my ($self, $meta, $data_cb, $cb) = @_;
 
-	VERBOSE && print STDERR 'M';
+	VERBOSE && print STDERR $data_cb ? '*' : ' ';
+
 	my $daff_meta = $self->_lap_meta2daff_meta($meta);
+
+	my $INT;
+	local $SIG{INT} = sub {
+		print STDERR "\nWill stop when reaching a stable state...\n";
+		$INT = 1;
+	};
 	eval {
 		$self->[DAFF_META]->put(
 			type_flag => 10,
@@ -122,7 +137,6 @@ sub on_token {
 	$self->check_writer(\$self->[DAFF_META], $self->[DAFF_META_DIR], $self->[MAX_DAFF_META_SIZE]);
 
 	if ($data_cb) {
-		VERBOSE && print STDERR 'D';
 		eval {
 			$self->[DAFF_DATA]->put(
 				type_flag => 11,
@@ -137,6 +151,14 @@ sub on_token {
 	}
 
 	$cb->();
+
+	if ($INT) {
+		print STDERR "\nStopping...\n";
+		$self->sync;
+		return 0
+	} else {
+		return 1
+	}
 }
 
 sub sync {

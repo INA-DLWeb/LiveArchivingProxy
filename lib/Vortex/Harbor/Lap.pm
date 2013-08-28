@@ -5,8 +5,7 @@ use Carp;
 use Anet;
 use Anet::Stream::TCP;
 use Anet::Watcher::FIFO;
-# use JSON::XS ();
-use Digest::SHA qw(sha256_hex);
+use Digest::SHA;
 use bytes;
 use List::Util qw(sum);
 use Digest;
@@ -16,6 +15,9 @@ use Compress::LZ4 qw(compress decompress);
 use Scalar::Util qw(refaddr);
 use File::Path qw(mkpath rmtree);
 use Time::HiRes qw(time);
+use File::HTTP 0.91;
+
+our $VERSION = 0.4;
 
 use base 'Vortex::Harbor::base';
 
@@ -33,6 +35,7 @@ use enum::fields::extending 'Vortex::Harbor::base', qw(
 	CONTENT_MAX_MEMORY
 	CONTENT_MAX_ABSOLUTE
 	CONTENT_DIR
+	DISCARD_WHEN_NO_WRITER
 
 	FIFO_REQS_SHORT
 	FIFO_REQS_LONG
@@ -51,7 +54,6 @@ use constant LONG_FIFO_LENGTH => 120;
 use constant SHORT_FIFO_TEMPO => 1;
 use constant LONG_FIFO_TEMPO => 60;
 
-use constant LAP_VERSION => 0.3;
 use constant COMPRESS => 0;
 
 use constant DEBUG_CHECK_DIGEST => 0;
@@ -68,10 +70,12 @@ sub new {
 		content_max_memory => undef,
 		content_max_absolute => undef,
 		content_dir => undef,
+		discard_when_no_writer => undef,
 		@_
 	);
 	
 	my %params = %args;
+	my $discard_when_no_writer = delete $args{discard_when_no_writer};
 	my $writer_port = delete($args{writer_port}) || croak "missing argument 'writer_port'";
 	my $bloom_netloc = delete($args{bloom_netloc});
 	my $digest = delete($args{digest});
@@ -100,6 +104,7 @@ sub new {
 		harbor_tld => $self->vortex->harbor_tld,
 	};
 
+	$self->[DISCARD_WHEN_NO_WRITER] = $discard_when_no_writer;
 	$self->[CONTENT_MAX_MEMORY] = $content_max_memory;
 	$self->[CONTENT_MAX_ABSOLUTE] = $content_max_absolute;
 	$self->[CONTENT_DIR] = $content_dir;
@@ -228,7 +233,7 @@ sub new_writer {
 	my $response_info = {
 		ok		=> $ok,
 		status	=> $status,
-		version	=> LAP_VERSION,
+		version	=> $VERSION,
 		digest	=> $self->[DIGEST],
 	};
 	$stream->write($self->encode_json($response_info)."\n");
@@ -318,12 +323,16 @@ sub consume {
 
 sub handle_http {
 	my ($self, $state) = @_;
-	$self->respond_path($state, {
-		LINK_BASE => $state->link_base,
-		URL_FRONT => $state->url_front,
-		HARBOR_TLD => $self->vortex->harbor_tld
-		#INFO => $self->info($state),
-	});
+
+	if ($state->{full_path} =~ m!^/get/(.+)!i) {
+		$self->handle_get($state, $1)
+	} else {
+		$self->respond_path($state, {
+			LINK_BASE => $state->link_base,
+			URL_FRONT => $state->url_front,
+			HARBOR_TLD => $self->vortex->harbor_tld
+		});
+	}
 }
 
 sub rpc_buffer_size {
@@ -377,28 +386,6 @@ sub rpc_info {
 	}
 }
 
-# sub info {
-	# my ($self, $state) = @_;
-	# my $str = sprintf("writers: %d\nfree writers: %d\n\n",
-		# 0+keys %{$self->[WRITERS]},
-		# 0+@{$self->[FREE_WRITERS]},
-	# );
-
-	# $str .= "LAP LIMBO: (pre bloom)\n". $self->_tokens_info(values %{$self->[LIMBO]}). "\n\n";
-	# $str .= "LAP QUEUE:\n". $self->_tokens_info(@{$self->[QUEUE]}). "\n\n";
-	# for my $writer (values %{$self->[WRITERS]}) {
-		# use YAML::XS;
-		# $str .= sprintf(qq!Writer (<a href="%s">close</a>):\n%sinfo:\n%sreport:\n%s\n!,
-			# $self->get_ppc($state, {redirection => 'REFRESH'})->get_url(close_writer => refaddr $writer),
-			# $self->_tokens_info(values %{$writer->{buffer}}),
-			# Dump($writer->{info}),
-			# Dump($writer->{report}),
-		# );
-	# }
-
-	# $str
-# }
-
 sub _tokens_info {
 	my $self = shift;
 	sprintf("buffer elements: %d\nduplicated size: %s\ndeduplicated size: %s\nbuffer size: %s\n",
@@ -422,41 +409,103 @@ sub filter_request {
 			s/^LAP-//i
 		} $headers->get_keys
 	};
-
-	# print $$headers, " => ", YAML::XS::Dump($state->{LAP_request_metadata}), "\n\n";
 }
 
 # compat when streaming==0
 sub filter_response {
 	my ($self, $state, $original_headers) = @_;
 	my $streamer = $self->reponse_streamer($state) || return;
-	$streamer->(0, $state->res_body->as_string_ref, $state->res_body->size);
-	$streamer->(1);
+	$streamer->(1, $state->res_body->as_string_ref, $state->res_body->size);
 }
 
 sub reponse_streamer {
 	my ($self, $state) = @_;
 	# warn "IS WEB=", $state->{is_web}||0;
-	return unless $state->{is_web};
+	return $state->{is_web} && $self->ingester(
+		url => $state->{url},
+		req_headers => $state->{req_headers_web_client},
+		res_headers => $state->{res_headers_web_client},
+		req_time => $state->{req_time},
+		req_info => $state->{LAP_request_metadata},
+		req_body => $state->{req_body}->as_scalar_ref,
+		req_ip => $state->{client_ip},
+		req_physical_ip => $state->{req_ip},
+	)
+}
+
+sub handle_get {
+	my ($self, $state, $url) = @_;
+
+	my $req_time = time;
+
+	async {
+		File::HTTP::get($url)
+	} closure {
+		my ($req_headers, $res_headers, $res_body) = \(@_);
+
+		$req_headers = Anet::HTTP::Headers->new($req_headers);
+		$res_headers = Anet::HTTP::Headers->new($res_headers);
+
+		$self->ingest(
+			url => $url,
+			req_headers => $req_headers,
+			res_headers => $res_headers,
+			req_time => $req_time,
+			req_info => $state->{LAP_request_metadata},
+			res_body => $res_body,
+			req_ip => $state->{client_ip},
+			req_physical_ip => $self->vortex->ip, #$state->{req_ip},
+		);
+
+		$res_headers->set(Connection => 'close');
+		$res_headers->set('Proxy-Connection' => 'close') if $res_headers->has('Proxy-Connection');
+		$self->respond($state, $res_headers, $res_body)
+	}
+}
+
+sub ingest {
+	my $self = shift;
+	my %args = @_;
+	my $res_body = delete($args{res_body});
+	croak "missing 'res_body' for ingestion.\nUse ingester() instead of ingest() if you want to stream the response body" unless defined $res_body;
+	$self->ingester(%args)->(1, ref($res_body) ? $res_body : \$res_body)
+}
+
+sub ingester {
+	my $self = shift;
+	my %args = (
+		# url => undef,
+		# req_headers => undef,
+		# res_headers => undef,
+		# req_time => undef,
+		# req_info => undef,
+		# req_body => undef,
+		# req_ip => undef,
+		# req_physical_ip => undef,
+		@_
+	);
+
+	if ($self->[DISCARD_WHEN_NO_WRITER] && !%{$self->[WRITERS]}) {
+		print STDERR "[DISCARD]";
+		return
+	}
 
 	my $id = ++$self->[AUTOINCREMENT];
 	my ($content, $fh, $file);
 	my $digester = $self->[DIGEST] && Digest->new($self->[DIGEST]);
-	# my $expected_size = $state->{req_headers}->get('Content-Length');
+
 	my $size = 0;
 	my $response_start_time = int(1000*time);
 
 	$self->[FIFO_REQS_SHORT]->log;
 	$self->[FIFO_REQS_LONG]->log;
 
-	my $headers_size = $state->{res_headers_web_client}->length + $state->{req_headers_web_client}->length;
+	my $headers_size = $args{req_headers}->length + $args{res_headers}->length;
 
 	$self->[FIFO_DATA_SIZE_SHORT]->log($headers_size);
 	$self->[FIFO_DATA_SIZE_LONG]->log($headers_size);
 	$self->[FIFO_TCP_SIZE_SHORT]->log($headers_size);
 	$self->[FIFO_TCP_SIZE_LONG]->log($headers_size);
-
-# warn $headers_size;
 
 	# my $done;
 	my $first = 1;
@@ -465,11 +514,33 @@ sub reponse_streamer {
 		# return if $done;
 		my ($status, $chunk, $tcp_chunk_size) = @_;
 
-		if ($status==0) {
+		# status:
+		#  -1: error
+		#   0: not finished
+		#   1: finished
+
+		if ($status<0) {
+			# closed by client (error)
+			# $done = 1;
+			if ($fh) {
+				$self->[FIFO_DISK_SHORT]->log(-$size);
+				$self->[FIFO_DISK_LONG]->log(-$size);
+				$fh = undef;
+				async {	unlink $file }
+			}
+			elsif ($size) {
+				$self->[FIFO_RAM_SHORT]->log(-$size);
+				$self->[FIFO_RAM_LONG]->log(-$size);
+				$content = undef;
+			}
+			return
+		}
+
+		if (defined $chunk) {
 			if ($first) {
 				$first = 0;
 				# first, and client stream not closed (or ignore close)
-				if (($state->{res_headers_web_client}->get('Content-Length')||0) > $self->[CONTENT_MAX_MEMORY]) {
+				if (($args{res_headers}->get('Content-Length')||0) > $self->[CONTENT_MAX_MEMORY]) {
 					# warn "SIZE from start\n";
 					$file = sprintf('%s/%012d', $self->[CONTENT_DIR], $id);
 					open($fh, '>', $file) or die "$file: $!";
@@ -480,8 +551,7 @@ sub reponse_streamer {
 			}
 
 			my $chunk_size = length $$chunk;
-			# warn "$chunk_size >= $tcp_chunk_size";
-# if $tcp_chunk_size < $chunk_size;
+			# $tcp_chunk_size = $chunk_size unless defined $tcp_chunk_size;
 			$self->[FIFO_DATA_SIZE_SHORT]->log($chunk_size);
 			$self->[FIFO_DATA_SIZE_LONG]->log($chunk_size);
 			$self->[FIFO_TCP_SIZE_SHORT]->log($tcp_chunk_size);
@@ -511,22 +581,8 @@ sub reponse_streamer {
 			}
 			$size += $chunk_size;
 		}
-		elsif ($status<0) {
-			# closed by client (error)
-			# $done = 1;
-			if ($fh) {
-				$self->[FIFO_DISK_SHORT]->log(-$size);
-				$self->[FIFO_DISK_LONG]->log(-$size);
-				$fh = undef;
-				async {	unlink $file }
-			}
-			elsif ($size) {
-				$self->[FIFO_RAM_SHORT]->log(-$size);
-				$self->[FIFO_RAM_LONG]->log(-$size);
-				$content = undef;
-			}
-		}
-		else {
+
+		if ($status) {
 			# $done = 1;
 			my $digest = $digester && $digester->hexdigest;
 			$fh = undef;
@@ -540,22 +596,22 @@ sub reponse_streamer {
 			my $token = {
 				meta => {
 					info => {
-						url => $state->{url},
-						method => $state->{method},
-						request_time => int ($state->{req_time} * 1000),
+						url => $args{url},
+						method => $args{req_headers}->get_method,
+						request_time => int ($args{req_time} * 1000),
 						response_start_time => $response_start_time,
 						response_stop_time => int(1000*time),
 						status => "success", # LAP status
 						digest => $digest,
 						size => $size,
-						request_ip => $state->{client_ip},
-						request_physical_ip => $state->{req_ip},
+						request_ip => $args{req_ip},
+						request_physical_ip => $args{req_physical_ip} || $args{req_ip},
 						# response_ip => 
 					},
-					'request-info' => $state->{LAP_request_metadata},
-					'request-headers' => $state->{req_headers_web_client}->as_string,
-					'response-headers' => $state->{res_headers_web_client}->as_string,
-					'request-body' => $state->{req_body}->as_scalar,
+					'request-info' => $args{req_info} || {},
+					'request-headers' => $args{req_headers}->as_string,
+					'response-headers' => $args{res_headers}->as_string,
+					'request-body' => $args{req_body} ? ${$args{req_body}} : '',
 					to_read => $size,
 					id => $id,
 				},

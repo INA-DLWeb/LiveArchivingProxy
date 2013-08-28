@@ -19,8 +19,6 @@ Anet::CORE::Loop::set_die_hook(
 
 $|=1;
 
-our $VERSION = '0.01';
-
 my %options = (
 	'web-port' => 4338,
 	'writer-port' => 4365,
@@ -42,6 +40,7 @@ my %options_def = (
 	'help' => 'Print usage info and exit.',
 	'debug' => "Debug mode.",
 	'legacy' => 'Lagacy mode.',
+	'discard-when-no-writer' => 'Simply discard collected contents when no writer is present.',
 );
 
 # unless (@ARGV) {
@@ -97,7 +96,8 @@ if ($options{debug}) {
 }
 
 if ($options{version}) {
-	print $VERSION, "\n";
+	require Vortex::Harbor::Lap;
+	print $Vortex::Harbor::Lap::VERSION, "\n";
 	exit 0;
 }
 
@@ -119,6 +119,7 @@ my $vortex = Vortex->new(
 
 	first_request_timeout => 30,
 	inter_request_timeout => 300,
+	global_request_timeout => 3600,
 	max_request_body_length => 1024*1024,
 
 	#only_preloaded_harbors => 1,
@@ -129,7 +130,9 @@ my $vortex = Vortex->new(
 			bloom_netloc => $options{'bloom-netloc'},
 			digest => $options{digest},
 			content_max_memory => 5*1024*1024,
+			content_max_absolute => 5*1024*1024*1024,
 			content_dir => $options{'temp-dir'},
+			discard_when_no_writer => $options{'discard-when-no-writer'}
 		},
 	},
 

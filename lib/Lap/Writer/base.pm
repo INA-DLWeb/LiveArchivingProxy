@@ -143,7 +143,8 @@ sub loop {
 			say $fh encode_json [done => $id];
 		};
 
-		$self->on_token($meta, $data_cb, $cb);
+		$self->on_token($meta, $data_cb, $cb) || return;
+		
 		if ($data_cb && $to_read) {
 			# empty
 			1 while $data_cb->(65536)

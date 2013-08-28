@@ -27,7 +27,8 @@ sub on_token {
 	my ($self, $meta, $data, $cb) = @_;
 	say $meta->{info}->{url};
 	$self->[WRITTEN_SIZE_LOG] += 1+length($meta->{info}->{url});
-	$cb->()
+	$cb->();
+	1
 }
 
 sub on_handshake {
