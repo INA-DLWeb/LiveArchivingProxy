@@ -16,13 +16,30 @@ The LAP is designed to be highly performant, easy to use and archive-format agno
 Getting started
 ---------------
 
- * User manual : https://github.com/INA-DLWeb/LiveArchivingProxy/raw/master/LAP-UserGuide.pdf
- * LAP binary : https://github.com/INA-DLWeb/LiveArchivingProxy/raw/master/lap.tar.gz
- * WARC writer : https://oss.sonatype.org/content/repositories/snapshots/fr/ina/dlweb/lap-writer-warc/1.0-SNAPSHOT/lap-writer-warc-1.0-SNAPSHOT-jar-with-dependencies.jar
+ * [User manual](https://github.com/INA-DLWeb/LiveArchivingProxy/raw/master/LAP-UserGuide.pdf)
+ * [LAP distribution](https://github.com/INA-DLWeb/LiveArchivingProxy/releases/download/v1.2.0/lap-1.2.0.tar.gz) including binary and user manual
+ * [WARC writer](https://oss.sonatype.org/content/repositories/snapshots/fr/ina/dlweb/lap-writer-warc/1.0-SNAPSHOT/lap-writer-warc-1.0-SNAPSHOT-jar-with-dependencies.jar)
 
 Code resources
 --------------
- * WARC writer project : https://bitbucket.org/nclarkekb/lap-writer-warc/
- * Generic writer project : https://oss.sonatype.org/content/repositories/snapshots/fr/ina/dlweb/lap-writer-generic/
+ * [WARC writer project](https://bitbucket.org/nclarkekb/lap-writer-warc/)
+ * [Generic writer project](https://oss.sonatype.org/content/repositories/snapshots/fr/ina/dlweb/lap-writer-generic/)
+ * A perl PAR version of the LAP is included within the [LAP distribution](https://github.com/INA-DLWeb/LiveArchivingProxy/releases/download/v1.2.0/lap-1.2.0.tar.gz)
 
 
+ChangeLog
+---------
+Note: This changelog only list major apparent changes.
+
+**1.2.0  2014-05-06**
+* pseudo HTTPS mode (see user manual)
+* compression-factor info for compressibility hint (LZ4)
+* bypass mode (lap-bypass header in request)
+* PUT web service
+* discard-when-no-writer option
+* allow-range-requests option
+* revamped screen log
+* various bug fixes
+
+**X.X.X  2013-07-10**
+* initial public release
