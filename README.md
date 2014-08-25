@@ -16,7 +16,7 @@ The LAP is designed to be highly performant, easy to use and archive-format agno
 Getting started
 ---------------
 
- * [User manual](https://github.com/INA-DLWeb/LiveArchivingProxy/raw/master/LAP-UserGuide.pdf)
+ * [User manual](https://docs.google.com/document/d/1yHyFjCy3RpGkX9ld6h5uWhQ6ydtgLx5dAelJyPnzrX4/edit?pli=1&rm=demo)
  * [LAP distribution](https://github.com/INA-DLWeb/LiveArchivingProxy/releases/download/v1.2.0/lap-1.2.0.tar.gz) including binary and user manual
  * [WARC writer](https://bitbucket.org/nclarkekb/lap-writer-warc/downloads/lap-writer-warc-1.0-SNAPSHOT-jar-with-dependencies.jar)
 
