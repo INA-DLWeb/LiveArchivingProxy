@@ -18,7 +18,7 @@ Getting started
 
  * [User manual](https://github.com/INA-DLWeb/LiveArchivingProxy/raw/master/LAP-UserGuide.pdf)
  * [LAP distribution](https://github.com/INA-DLWeb/LiveArchivingProxy/releases/download/v1.2.0/lap-1.2.0.tar.gz) including binary and user manual
- * [WARC writer](https://oss.sonatype.org/content/repositories/snapshots/fr/ina/dlweb/lap-writer-warc/1.0-SNAPSHOT/lap-writer-warc-1.0-SNAPSHOT-jar-with-dependencies.jar)
+ * [WARC writer](https://bitbucket.org/nclarkekb/lap-writer-warc/downloads/lap-writer-warc-1.0-SNAPSHOT-jar-with-dependencies.jar)
 
 Code resources
 --------------
