@@ -31,6 +31,17 @@ ChangeLog
 ---------
 Note: This changelog only list major apparent changes.
 
+**1.2.1  2014-08-26**
+* better HTTP/1.1 handling
+* vortex log fix
+* bloom filter handshake timeout
+* bloom filter TCP tunneling removed
+* hostname fix
+* DNS caching for IPv6 fix
+* deflate fix
+* proxy setting revamped
+* PAR version fix
+
 **1.2.0  2014-05-06**
 * pseudo HTTPS mode (see user manual)
 * compression-factor info for compressibility hint (LZ4)
